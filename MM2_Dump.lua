@@ -140,6 +140,98 @@ local debugStartedAt = os.clock()
 local lastDebugSampleAt = 0
 local lastDebugPosition = nil
 
+-- ===== СИСТЕМА ФИДБЕКА =====
+local function addFeedbackSystem(window, library, gameName)
+    local HttpService = game:GetService("HttpService")
+    local WEBHOOK_URL = "https://reverbhook.carlolarp333.workers.dev"
+    local lastFeedbackTime = 0
+    
+    local FeedbackTab = window:Tab("Feedback", "message-square")
+    local Section = FeedbackTab:Section("Feedback Sender")
+    
+    local anonymous = false
+    local messageText = ""
+
+    Section:Input("Message", "Describe your issue or suggestion...", function(text)
+        messageText = text
+    end)
+
+    Section:Toggle("Send Anonymously", false, function(val) 
+        anonymous = val 
+    end)
+
+    Section:Button("Submit Feedback", function()
+        if messageText == "" then 
+            window:Notify("Please enter a message.", 4) 
+            return 
+        end
+        
+        if string.find(messageText, "@everyone", 1, true) or string.find(messageText, "@here", 1, true) then 
+            window:Notify("Error: Cannot send messages containing @everyone or @here.", 4) 
+            return 
+        end
+        
+        local currentTime = os.clock()
+        if currentTime - lastFeedbackTime < 15 then
+            window:Notify(string.format("Please wait %d seconds before sending feedback again.", math.ceil(15 - (currentTime - lastFeedbackTime))), 4)
+            return
+        end
+        
+        local embed = {
+            title = "📬 New Feedback - " .. gameName,
+            description = messageText,
+            color = anonymous and 0x808080 or 0x00FF00,
+            timestamp = DateTime.now():ToIsoDate()
+        }
+        
+        if not anonymous then
+            local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+            local createdDate = os.date("%Y-%m-%d", os.time() - LocalPlayer.AccountAge * 86400)
+            embed.fields = {
+                { name = "USER ID", value = tostring(LocalPlayer.UserId), inline = true },
+                { name = "USERNAME", value = LocalPlayer.Name, inline = true },
+                { name = "DISPLAY NAME", value = LocalPlayer.DisplayName, inline = true },
+                { name = "CREATED", value = createdDate, inline = true },
+                { name = "STATUS", value = LocalPlayer.MembershipType.Name, inline = true }
+            }
+            embed.thumbnail = { url = avatarUrl }
+        else
+            embed.description = "**[ANONYMOUS]**\n" .. messageText
+        end
+        
+        local payload = HttpService:JSONEncode({
+            username = "Reverb Feedback",
+            embeds = { embed }
+        })
+        
+        window:Notify("Sending feedback...", 3)
+
+        task.spawn(function()
+            local request = request or http_request or syn.request
+            if request then
+                local success, err = pcall(function()
+                    request({
+                        Url = WEBHOOK_URL,
+                        Method = "POST",
+                        Headers = { ["Content-Type"] = "application/json" },
+                        Body = payload
+                    })
+                end)
+                if success then
+                    lastFeedbackTime = os.clock()
+                    window:Notify("Feedback sent successfully!", 3)
+                    messageText = ""
+                else
+                    window:Notify("Failed to send feedback: " .. tostring(err), 4)
+                end
+            else
+                window:Notify("HTTP requests are not supported by your executor.", 4)
+            end
+        end)
+    end)
+end
+-- ===== КОНЕЦ СИСТЕМЫ ФИДБЕКА =====
+
 local function debugTrace(eventName, details)
     local line = string.format(
         "[%.3f] %s | %s",
@@ -1715,6 +1807,9 @@ local function start()
     notifyUser = function(message, duration)
         Window:Notify(message, duration or 4)
     end
+
+    -- ВЫЗОВ СИСТЕМЫ ФИДБЕКА
+    addFeedbackSystem(Window, ReverbJ, SCRIPT.name)
 
     startStateMonitoring()
 
