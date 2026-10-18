@@ -59,7 +59,6 @@ local function reduceGraphics(instance)
             overrideGraphics(instance, "TextureID", "")
         end
     elseif instance:IsA("Decal") or instance:IsA("Texture") then
-        -- Keep signs and gameplay information readable; hide repeating textures.
         if instance:IsA("Texture") then
             overrideGraphics(instance, "Transparency", 1)
         end
@@ -98,7 +97,6 @@ local function setLowGraphics(enabled)
                     if not graphicsSettings[key] then
                         graphicsSettings[key] = { source = source, original = source(), applied = value }
                     end
-                    -- Temporary local visual override, without persisting game settings.
                     source(value)
                 end
             end
@@ -188,6 +186,105 @@ local function setMovementMode(mode)
         Runtime.AutoSpeedToggle:Set(autoSpeedEnabled, true)
     end
 end
+
+-- ===== СИСТЕМА ФИДБЕКА =====
+local function addFeedbackSystem(window, library, gameName)
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local LocalPlayer = Players.LocalPlayer
+    local WEBHOOK_URL = "https://reverbhook.carlolarp333.workers.dev"
+    local lastFeedbackTime = 0
+    
+    local FeedbackTab = window:Tab("Feedback", "message-square")
+    local Section = FeedbackTab:Section("Feedback Sender")
+    
+    local anonymous = false
+    local messageText = ""
+
+    local function notifyUser(text)
+        window:Notify(text, 4)
+    end
+
+    -- Используем нативное поле ввода ReverbJ
+    Section:Input("Message", "Describe your issue or suggestion...", function(text)
+        messageText = text
+    end)
+
+    Section:Toggle("Send Anonymously", false, function(val) 
+        anonymous = val 
+    end)
+
+    Section:Button("Submit Feedback", function()
+        if messageText == "" then 
+            notifyUser("Please enter a message.") 
+            return 
+        end
+        
+        if string.find(messageText, "@everyone", 1, true) or string.find(messageText, "@here", 1, true) then 
+            notifyUser("Error: Cannot send messages containing @everyone or @here.") 
+            return 
+        end
+        
+        local currentTime = os.clock()
+        if currentTime - lastFeedbackTime < 15 then
+            notifyUser(string.format("Please wait %d seconds before sending feedback again.", math.ceil(15 - (currentTime - lastFeedbackTime))))
+            return
+        end
+        
+        local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+        local createdDate = os.date("%Y-%m-%d", os.time() - LocalPlayer.AccountAge * 86400)
+        
+        local embed = {
+            title = "📬 New Feedback - " .. gameName,
+            description = messageText,
+            color = anonymous and 0x808080 or 0x00FF00,
+            fields = {},
+            timestamp = DateTime.now():ToIsoDate()
+        }
+        
+        if not anonymous then
+            table.insert(embed.fields, { name = "USER ID", value = tostring(LocalPlayer.UserId), inline = true })
+            table.insert(embed.fields, { name = "USERNAME", value = LocalPlayer.Name, inline = true })
+            table.insert(embed.fields, { name = "DISPLAY NAME", value = LocalPlayer.DisplayName, inline = true })
+            table.insert(embed.fields, { name = "CREATED", value = createdDate, inline = true })
+            table.insert(embed.fields, { name = "STATUS", value = LocalPlayer.MembershipType.Name, inline = true })
+            embed.thumbnail = { url = avatarUrl }
+        else
+            embed.description = "**[ANONYMOUS]**\n" .. messageText
+        end
+        
+        local payload = HttpService:JSONEncode({
+            username = "Reverb Feedback",
+            embeds = { embed }
+        })
+        
+        notifyUser("Sending feedback...")
+
+        task.spawn(function()
+            local request = request or http_request or syn.request
+            if request then
+                local success, err = pcall(function()
+                    request({
+                        Url = WEBHOOK_URL,
+                        Method = "POST",
+                        Headers = { ["Content-Type"] = "application/json" },
+                        Body = payload
+                    })
+                end)
+                if success then
+                    lastFeedbackTime = os.clock()
+                    notifyUser("Feedback sent successfully!")
+                    messageText = ""
+                else
+                    notifyUser("Failed to send feedback: " .. tostring(err))
+                end
+            else
+                notifyUser("HTTP requests are not supported by your executor.")
+            end
+        end)
+    end)
+end
+-- ===== КОНЕЦ СИСТЕМЫ ФИДБЕКА =====
 
 function Runtime.Destroy(restorePosition)
     if destroyed then
@@ -299,7 +396,6 @@ local function checkCompatibility()
     requireMethods(PetState.actions, "Pet actions", { "autoHatch" })
     requireMethods(SettingsState, "Visual settings", { "getSource" })
     requireMethods(PerformanceState, "Block settings", { "getSettingKey" })
-    -- Read-only probes: do not start a hold, move the player or purchase anything.
     InteractionRuntime.getStackCapacity(LocalPlayer)
     InteractionController._runtime:_getInventoryCount()
     return {
@@ -432,7 +528,6 @@ local function buildGame(window, dependencies)
         end
         lastSafeCFrame = getRoot() and getRoot().CFrame or lastSafeCFrame
         setMovementMode("hatch")
-        -- Stop a manually started native hatch before choosing this egg.
         PetState.autoHatch(false)
         autoHatchEnabled = true
         hatchStarted = false
@@ -457,8 +552,6 @@ local function buildGame(window, dependencies)
 
     local function runHatchStep()
         if hatchStarted then
-            -- The native controller stops for full storage, insufficient coins,
-            -- leaving the egg, respawn or an open game menu. Do not override it.
             if not PetState.autoHatch() then
                 stopHatch()
             end
@@ -551,8 +644,6 @@ local function buildGame(window, dependencies)
     Runtime.StopCollectHold = stopCollectHold
 
     local function startCollectHold()
-        -- Quarry grants use the region prompt, not the loose-block interaction hold.
-        -- This is the same input path used by E and the mobile quarry button.
         local active = RegionPromptController:_resolveActive()
         if not active or active.id ~= "Quarry" then
             stopCollectHold()
@@ -651,7 +742,6 @@ local function buildGame(window, dependencies)
             return
         end
 
-        -- Stay above the active layer, never inside an occupied placement slot.
         local clearance = PyramidConfig.BlockSize / 2 + 4
         if placementModel ~= pyramid or placementLayer ~= layer or not placementCFrame then
             stopPlacementHold()
@@ -663,7 +753,6 @@ local function buildGame(window, dependencies)
         moveTo(placementCFrame)
         local slot = runtime:_findFreePyramidSlot()
         if not slot then
-            -- The native resolver respects occupied and locally reserved slots.
             slot = PyramidRuntime.resolveNearestSlot(root.Position, Workspace, function(slotLayer, index)
                 return runtime:_isSlotReserved(slotLayer, index)
             end, geometry.getLayerSide(layer))
@@ -712,7 +801,6 @@ local function buildGame(window, dependencies)
             end
         end
 
-        -- Wait through a missing pyramid even when enabled after completion.
         if (autoBuildEnabled or autoWatersEnabled) and not pyramid then
             waitingForPyramid = true
         end
@@ -752,7 +840,6 @@ local function buildGame(window, dependencies)
             return
         end
 
-        -- Let the native hatch reveal finish before resuming placement.
         if PetState.reveal() then
             stopCollectHold()
             stopPlacementHold()
@@ -814,7 +901,6 @@ local function buildGame(window, dependencies)
             return
         end
         startCollectHold()
-        -- Observe capacity here; the native hold controls pickup timing and bursts.
         task.wait(0.1)
     end
 
@@ -1230,6 +1316,10 @@ local function start()
     })
 
     Runtime.Window = Window
+    
+    -- ВЫЗОВ СИСТЕМЫ ФИДБЕКА
+    addFeedbackSystem(Window, ReverbLib, SCRIPT.name)
+
     buildGame(Window, dependencies)
 
     local SettingsTab = Window:Tab("Settings")
