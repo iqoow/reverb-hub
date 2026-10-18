@@ -84,6 +84,118 @@ local function findAppealRemote()
     return remote
 end
 
+-- ===== СИСТЕМА ФИДБЕКА =====
+local function addFeedbackSystem(window, library, gameName)
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local LocalPlayer = Players.LocalPlayer
+    local WEBHOOK_URL = "https://reverbhook.carlolarp333.workers.dev"
+    local lastFeedbackTime = 0
+    
+    local FeedbackTab = window:Tab("Feedback", "message-square")
+    local Section = FeedbackTab:Section("Feedback Sender")
+    
+    local anonymous = false
+    local msgBox = nil
+
+    local function notifyUser(title, text)
+        window:Notify(title .. ": " .. text, 4)
+    end
+
+    local parentObj = Section.Frame or Section.Container or Section.InnerFrame
+    
+    if parentObj then
+        local title = Instance.new("TextLabel")
+        title.Text = "FEEDBACK SENDER"
+        title.Size = UDim2.new(1, 0, 0, 30)
+        title.BackgroundTransparency = 1
+        title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        title.Font = Enum.Font.GothamBold
+        title.TextSize = 16
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Position = UDim2.new(0, 10, 0, 5)
+        title.Parent = parentObj
+        
+        msgBox = Instance.new("TextBox")
+        msgBox.Size = UDim2.new(1, -20, 0, 80)
+        msgBox.Position = UDim2.new(0, 10, 0, 40)
+        msgBox.PlaceholderText = "Describe your issue or suggestion..."
+        msgBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        msgBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        msgBox.Font = Enum.Font.Gotham
+        msgBox.TextSize = 14
+        msgBox.TextWrapped = true
+        msgBox.TextXAlignment = Enum.TextXAlignment.Left
+        msgBox.TextYAlignment = Enum.TextYAlignment.Top
+        msgBox.ClearTextOnFocus = false
+        msgBox.Parent = parentObj
+    end
+
+    Section:Toggle("Send Anonymously", false, function(val) anonymous = val end)
+
+    Section:Button("Submit Feedback", function()
+        local message = msgBox and msgBox.Text or ""
+        if message == "" then notifyUser("Feedback", "Please enter a message.") return end
+        if string.find(message, "@everyone", 1, true) or string.find(message, "@here", 1, true) then notifyUser("Error", "Cannot send messages containing @everyone or @here.") return end
+        local currentTime = os.clock()
+        if currentTime - lastFeedbackTime < 15 then
+            notifyUser("Cooldown", string.format("Please wait %d seconds before sending feedback again.", math.ceil(15 - (currentTime - lastFeedbackTime))))
+            return
+        end
+        
+        local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+        local createdDate = os.date("%Y-%m-%d", os.time() - LocalPlayer.AccountAge * 86400)
+        
+        local embed = {
+            title = "📬 New Feedback - " .. gameName,
+            description = message,
+            color = anonymous and 0x808080 or 0x00FF00,
+            fields = {},
+            timestamp = DateTime.now():ToIsoDate()
+        }
+        
+        if not anonymous then
+            table.insert(embed.fields, { name = "USER ID", value = tostring(LocalPlayer.UserId), inline = true })
+            table.insert(embed.fields, { name = "USERNAME", value = LocalPlayer.Name, inline = true })
+            table.insert(embed.fields, { name = "DISPLAY NAME", value = LocalPlayer.DisplayName, inline = true })
+            table.insert(embed.fields, { name = "CREATED", value = createdDate, inline = true })
+            table.insert(embed.fields, { name = "STATUS", value = LocalPlayer.MembershipType.Name, inline = true })
+            embed.thumbnail = { url = avatarUrl }
+        else
+            embed.description = "**[ANONYMOUS]**\n" .. message
+        end
+        
+        local payload = HttpService:JSONEncode({
+            username = "Reverb Feedback",
+            embeds = { embed }
+        })
+        
+        task.spawn(function()
+            local request = request or http_request or syn.request
+            if request then
+                local success, err = pcall(function()
+                    request({
+                        Url = WEBHOOK_URL,
+                        Method = "POST",
+                        Headers = { ["Content-Type"] = "application/json" },
+                        Body = payload
+                    })
+                end)
+                if success then
+                    lastFeedbackTime = os.clock()
+                    notifyUser("Success", "Feedback sent successfully!")
+                    if msgBox then msgBox.Text = "" end
+                else
+                    notifyUser("Error", "Failed to send feedback: " .. tostring(err))
+                end
+            else
+                notifyUser("Error", "HTTP requests are not supported by your executor.")
+            end
+        end)
+    end)
+end
+-- ===== КОНЕЦ СИСТЕМЫ ФИДБЕКА =====
+
 local function buildGame(window)
     local MainTab = window:Tab("Main")
     local MainSection = MainTab:Section("Main")
@@ -510,7 +622,6 @@ local function buildGame(window)
             return
         end
 
-        -- The server starts accepting MogClick after the four-step countdown.
         local countdownDeadline = os.clock()
             + MogConfig.CountdownStep * #MogConfig.CountdownSteps
         while autoUnlockEnabled
@@ -754,8 +865,6 @@ local function buildGame(window)
 
         local claimedAt = os.clock()
 
-        -- Claiming teleports the player, but the arena only resets after they
-        -- leave its room. Move back toward the lobby before starting again.
         task.wait(0.3)
         local firstZone = world:FindFirstChild("Zone0")
         if not retreatFromZone(firstZone, 40) then
@@ -808,8 +917,6 @@ local function buildGame(window)
         end
     end)
 
-    -- One request per scheduler step is the quickest stable client-side rate.
-    -- Failures back off briefly so a missing/replaced remote cannot cause a hot error loop.
     task.spawn(function()
         while isActive() do
             if not autoGetAppealEnabled then
@@ -886,9 +993,11 @@ local function start()
     })
 
     Runtime.Window = Window
+    -- ВЫЗОВ СИСТЕМЫ ФИДБЕКА
+    addFeedbackSystem(Window, ReverbLib, SCRIPT.name)
+    
     buildGame(Window)
 
-    -- Reverb J automatically adds its enabled-by-default Anti AFK toggle here.
     local SettingsTab = Window:Tab("Settings")
     SettingsTab:Section("Preferences"):Toggle(
         "Remember active settings",
