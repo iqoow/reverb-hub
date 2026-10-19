@@ -86,83 +86,105 @@ end
 
 -- ===== СИСТЕМА ФИДБЕКА =====
 local function addFeedbackSystem(window, library, gameName)
-    local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
-    local LocalPlayer = Players.LocalPlayer
     local WEBHOOK_URL = "https://reverbhook.carlolarp333.workers.dev"
     local lastFeedbackTime = 0
+    local isSending = false -- Блокировка от спама во время отправки
     
-    local FeedbackTab = window:Tab("Feedback", "message-square")
-    local Section = FeedbackTab:Section("Feedback Sender")
+    local FeedbackTab
+    if window.CreateTab then
+        FeedbackTab = window:CreateTab("Feedback", "message-square")
+    else
+        FeedbackTab = window:Tab("Feedback", "message-square")
+    end
+
+    local Section
+    if FeedbackTab.CreateSection then
+        Section = FeedbackTab:CreateSection("Feedback Sender")
+    else
+        Section = FeedbackTab:Section("Feedback Sender")
+    end
     
     local anonymous = false
-    local msgBox = nil
+    local messageText = ""
 
     local function notifyUser(title, text)
-        window:Notify(title .. ": " .. text, 4)
+        if window.Notify then
+            window:Notify(title .. ": " .. text, 4)
+        else
+            library:Notify({Title = title, Content = text, Duration = 4})
+        end
     end
 
-    local parentObj = Section.Frame or Section.Container or Section.InnerFrame
-    
-    if parentObj then
-        local title = Instance.new("TextLabel")
-        title.Text = "FEEDBACK SENDER"
-        title.Size = UDim2.new(1, 0, 0, 30)
-        title.BackgroundTransparency = 1
-        title.TextColor3 = Color3.fromRGB(255, 255, 255)
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 16
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Position = UDim2.new(0, 10, 0, 5)
-        title.Parent = parentObj
+    -- Используем нативное поле ввода в зависимости от UI
+    if Section.Input then
+        Section:Input("Message", "Describe your issue or suggestion...", function(text)
+            messageText = text
+        end)
+    else
+        Section:CreateInput({
+            Name = "Message",
+            Placeholder = "Describe your issue or suggestion...",
+            Callback = function(text) messageText = text end
+        })
+    end
+
+    if Section.Toggle then
+        Section:Toggle("Send Anonymously", false, function(val) anonymous = val end)
+    else
+        Section:CreateToggle({
+            Name = "Send Anonymously",
+            CurrentValue = false,
+            Flag = "FeedbackAnon",
+            Callback = function(val) anonymous = val end
+        })
+    end
+
+    local function submitFeedback()
+        -- Если уже идет отправка, игнорируем клик
+        if isSending then return end
+
+        if messageText == "" then 
+            notifyUser("Feedback", "Please enter a message.") 
+            return 
+        end
         
-        msgBox = Instance.new("TextBox")
-        msgBox.Size = UDim2.new(1, -20, 0, 80)
-        msgBox.Position = UDim2.new(0, 10, 0, 40)
-        msgBox.PlaceholderText = "Describe your issue or suggestion..."
-        msgBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-        msgBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-        msgBox.Font = Enum.Font.Gotham
-        msgBox.TextSize = 14
-        msgBox.TextWrapped = true
-        msgBox.TextXAlignment = Enum.TextXAlignment.Left
-        msgBox.TextYAlignment = Enum.TextYAlignment.Top
-        msgBox.ClearTextOnFocus = false
-        msgBox.Parent = parentObj
-    end
-
-    Section:Toggle("Send Anonymously", false, function(val) anonymous = val end)
-
-    Section:Button("Submit Feedback", function()
-        local message = msgBox and msgBox.Text or ""
-        if message == "" then notifyUser("Feedback", "Please enter a message.") return end
-        if string.find(message, "@everyone", 1, true) or string.find(message, "@here", 1, true) then notifyUser("Error", "Cannot send messages containing @everyone or @here.") return end
+        if string.find(messageText, "@everyone", 1, true) or string.find(messageText, "@here", 1, true) then 
+            notifyUser("Error", "Cannot send messages containing @everyone or @here.") 
+            return 
+        end
+        
         local currentTime = os.clock()
         if currentTime - lastFeedbackTime < 15 then
             notifyUser("Cooldown", string.format("Please wait %d seconds before sending feedback again.", math.ceil(15 - (currentTime - lastFeedbackTime))))
             return
         end
+
+        -- СТАВИМ БЛОКИРОВКУ И ТАЙМЕР СРАЗУ
+        isSending = true
+        lastFeedbackTime = os.clock()
         
-        local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
-        local createdDate = os.date("%Y-%m-%d", os.time() - LocalPlayer.AccountAge * 86400)
-        
+        local LocalPlayer = game:GetService("Players").LocalPlayer
         local embed = {
             title = "📬 New Feedback - " .. gameName,
-            description = message,
+            description = messageText,
             color = anonymous and 0x808080 or 0x00FF00,
-            fields = {},
             timestamp = DateTime.now():ToIsoDate()
         }
         
         if not anonymous then
-            table.insert(embed.fields, { name = "USER ID", value = tostring(LocalPlayer.UserId), inline = true })
-            table.insert(embed.fields, { name = "USERNAME", value = LocalPlayer.Name, inline = true })
-            table.insert(embed.fields, { name = "DISPLAY NAME", value = LocalPlayer.DisplayName, inline = true })
-            table.insert(embed.fields, { name = "CREATED", value = createdDate, inline = true })
-            table.insert(embed.fields, { name = "STATUS", value = LocalPlayer.MembershipType.Name, inline = true })
+            local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+            local createdDate = os.date("%Y-%m-%d", os.time() - LocalPlayer.AccountAge * 86400)
+            embed.fields = {
+                { name = "USER ID", value = tostring(LocalPlayer.UserId), inline = true },
+                { name = "USERNAME", value = LocalPlayer.Name, inline = true },
+                { name = "DISPLAY NAME", value = LocalPlayer.DisplayName, inline = true },
+                { name = "CREATED", value = createdDate, inline = true },
+                { name = "STATUS", value = LocalPlayer.MembershipType.Name, inline = true }
+            }
             embed.thumbnail = { url = avatarUrl }
         else
-            embed.description = "**[ANONYMOUS]**\n" .. message
+            embed.description = "**[ANONYMOUS]**\n" .. messageText
         end
         
         local payload = HttpService:JSONEncode({
@@ -170,6 +192,8 @@ local function addFeedbackSystem(window, library, gameName)
             embeds = { embed }
         })
         
+        notifyUser("Feedback", "Sending...")
+
         task.spawn(function()
             local request = request or http_request or syn.request
             if request then
@@ -182,17 +206,27 @@ local function addFeedbackSystem(window, library, gameName)
                     })
                 end)
                 if success then
-                    lastFeedbackTime = os.clock()
                     notifyUser("Success", "Feedback sent successfully!")
-                    if msgBox then msgBox.Text = "" end
+                    messageText = "" -- Очищаем текст после успешной отправки
                 else
                     notifyUser("Error", "Failed to send feedback: " .. tostring(err))
                 end
             else
                 notifyUser("Error", "HTTP requests are not supported by your executor.")
             end
+            -- Снимаем блокировку после завершения запроса
+            isSending = false
         end)
-    end)
+    end
+
+    if Section.Button then
+        Section:Button("Submit Feedback", submitFeedback)
+    else
+        Section:CreateButton({
+            Name = "Submit Feedback",
+            Callback = submitFeedback
+        })
+    end
 end
 -- ===== КОНЕЦ СИСТЕМЫ ФИДБЕКА =====
 
