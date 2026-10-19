@@ -20,29 +20,47 @@ local games = {
 }
 
 local placeId = game.PlaceId
+print("[Hub] Current PlaceId: " .. tostring(placeId))
+
 local fileName = games[placeId]
 
 if not fileName then
+    warn("[Hub] This game (" .. tostring(placeId) .. ") is not supported. Script not found in list.")
     return 
 end
 
 local scriptUrl = GITHUB_RAW_BASE .. fileName
-print("[Hub] Loading script: " .. fileName)
+print("[Hub] Found script: " .. fileName)
+print("[Hub] Loading from URL: " .. scriptUrl)
 
 local success, err = pcall(function()
     local source = game:HttpGet(scriptUrl)
-    if source and source ~= "" and not string.find(source, "404: Not Found") then
-        local func, compileError = loadstring(source)
-        if func then
-            func()
-        else
-            warn("[Hub] Compilation error: " .. tostring(compileError))
-        end
+    
+    if not source or source == "" then
+        warn("[Hub] Error: Server returned an empty response.")
+        return
+    end
+    
+    if string.find(source, "404: Not Found") then
+        warn("[Hub] 404 Error: File not found on GitHub. Check the filename and branch (main).")
+        return
+    end
+    
+    -- Sometimes GitHub returns HTML if the repo is private or the link is broken
+    if string.find(source, "<!DOCTYPE html>") or string.find(source, "<html") then
+        warn("[Hub] Error: GitHub returned an HTML page instead of code. Make sure the repository is Public.")
+        return
+    end
+
+    local func, compileError = loadstring(source)
+    if func then
+        print("[Hub] Compilation successful. Executing...")
+        func()
     else
-        warn("[Hub] File not found.")
+        warn("[Hub] Lua compilation error: " .. tostring(compileError))
     end
 end)
 
 if not success then
-    warn("[Hub] Error: " .. tostring(err))
+    warn("[Hub] Critical error: " .. tostring(err))
 end
